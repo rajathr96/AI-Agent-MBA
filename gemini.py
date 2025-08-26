@@ -13,9 +13,9 @@ import nest_asyncio
 nest_asyncio.apply()
 
 # --- Configuration ---
-# Your Google Gemini API key and local document path as provided
+# Your Google Gemini API key as provided
 GOOGLE_API_KEY = "AIzaSyB2jPzfxtfKqsGgRaRTlSV8kQlm49gxUJM"
-LOCAL_DOC_PATH = "/Users/rajathr/Downloads/OneDrive_1_11-05-2025 2/Term 1/Organisation Design"
+# LOCAL_DOC_PATH is now taken from user input, removed hardcoded value
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="MBA Document AI Agent", layout="wide")
@@ -36,7 +36,7 @@ st.markdown(
 )
 
 st.title("📚 MBA Document AI Agent")
-st.markdown(f"Answering questions based on your MBA documents from: `{LOCAL_DOC_PATH}`")
+st.markdown("Upload your MBA study materials, and I'll answer your questions based on them!")
 
 # Initialize session state variables
 if "vector_store" not in st.session_state:
@@ -47,8 +47,10 @@ if "initial_load_done" not in st.session_state:
     st.session_state.initial_load_done = False
 if "qa_chain" not in st.session_state:
     st.session_state.qa_chain = None
-if "last_response" not in st.session_state: # To store the last response for tab display
+if "last_response" not in st.session_state:
     st.session_state.last_response = None
+if "user_local_doc_path" not in st.session_state: # New: Store user's input path
+    st.session_state.user_local_doc_path = ""
 
 
 # --- Functions for Document Processing ---
@@ -180,16 +182,38 @@ def load_documents_from_local_path(_directory_path):
     print(f"--- Finished: load_documents_from_local_path. Loaded {len(all_documents)} documents. ---\n")
     return all_documents, newly_processed_files_count
 
-# --- Initial Document Loading and Processing on App Start ---
-if not st.session_state.initial_load_done:
-    st.subheader("Loading Documents...")
-    with st.spinner(f"Scanning `{LOCAL_DOC_PATH}` for MBA documents. This might take a moment if the directory is large..."):
-        documents_from_path, num_newly_processed = load_documents_from_local_path(LOCAL_DOC_PATH)
+
+# --- User Input for Document Path ---
+st.header("1. Specify Your MBA Documents Folder")
+# Update the default value with your last used path for convenience
+input_path = st.text_input(
+    "Enter the full local path to your MBA documents folder:",
+    value=st.session_state.user_local_doc_path or "/Users/rajathr/Downloads/OneDrive_1_11-05-2025 2/Term 1/Organisation Design", # Default if not set
+    placeholder="e.g., /Users/yourname/Documents/MBA_Materials",
+    key="path_input_field" # Unique key for the widget
+)
+
+# Only proceed if the input path is not empty and has changed
+if input_path and input_path != st.session_state.user_local_doc_path:
+    st.session_state.user_local_doc_path = input_path
+    st.session_state.initial_load_done = False # Reset flag to re-trigger load for new path
+    st.session_state.vector_store = None # Clear old vector store
+    st.session_state.processed_files = set() # Clear processed files
+    st.session_state.qa_chain = None # Clear old QA chain
+    st.session_state.last_response = None # Clear old response
+    st.rerun() # Rerun the script to apply the new path and start processing
+
+# --- Initial Document Loading and Processing on App Start / Path Change ---
+# This block now runs only if a path is provided AND initial_load_done is False
+if st.session_state.user_local_doc_path and not st.session_state.initial_load_done:
+    st.header("2. Building Your Knowledge Base")
+    with st.spinner(f"Scanning `{st.session_state.user_local_doc_path}` for MBA documents. This might take a moment if the directory is large..."):
+        documents_from_path, num_newly_processed = load_documents_from_local_path(st.session_state.user_local_doc_path)
 
         if documents_from_path:
             print("\n--- Starting overall document processing (chunking and vector store creation) ---")
             raw_text_chunks = get_text_chunks(documents_from_path)
-            if st.session_state.vector_store:
+            if st.session_state.vector_store: # This branch is unlikely now, as we clear it on path change
                 print("  Adding new documents to existing vector store.")
                 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_API_KEY)
                 st.session_state.vector_store.add_documents(raw_text_chunks, embeddings=embeddings)
@@ -201,7 +225,7 @@ if not st.session_state.initial_load_done:
                 if st.session_state.qa_chain is None:
                     st.session_state.qa_chain = get_conversational_chain_instance()
 
-                st.success(f"Loaded and processed {num_newly_processed} new documents from `{LOCAL_DOC_PATH}`.")
+                st.success(f"Loaded and processed {num_newly_processed} new documents from `{st.session_state.user_local_doc_path}`.")
                 st.info(f"Total unique documents in knowledge base: {len(st.session_state.processed_files)}.")
                 st.session_state.initial_load_done = True
                 print("--- Finished overall document processing ---\n")
@@ -209,14 +233,14 @@ if not st.session_state.initial_load_done:
                 st.error("Failed to set up the knowledge base. Please check the console for errors and your API key.")
                 st.session_state.initial_load_done = True
         else:
-            st.warning(f"No PDF or TXT documents found or processed in `{LOCAL_DOC_PATH}`. Please check the path and file types.")
+            st.warning(f"No PDF or TXT documents found or processed in `{st.session_state.user_local_doc_path}`. Please check the path and file types.")
             st.session_state.initial_load_done = True
-            print(f"Warning: No documents found in {LOCAL_DOC_PATH}")
+            print(f"Warning: No documents found in {st.session_state.user_local_doc_path}")
 
 
 # --- Question Answering Interface ---
 if st.session_state.vector_store and st.session_state.qa_chain:
-    st.header("Ask a Question about your MBA Documents")
+    st.header("3. Ask a Question about your MBA Documents")
     user_question = st.text_area("Enter your question here:", placeholder="e.g., What are the key principles of Porter's Five Forces?", height=100)
 
     if user_question:
@@ -224,7 +248,6 @@ if st.session_state.vector_store and st.session_state.qa_chain:
             response = st.session_state.qa_chain.invoke({"query": user_question})
             st.session_state.last_response = response # Store the response in session state
 
-    # Display results in tabs only if there's a last_response
     if st.session_state.last_response:
         answer_tab, sources_tab = st.tabs(["Answer", "Sources"])
 
@@ -242,8 +265,11 @@ if st.session_state.vector_store and st.session_state.qa_chain:
                         st.text(doc.page_content[:500] + "...")
             else:
                 st.info("No source documents were found for this answer.")
-else:
-    st.info("No documents are loaded or the knowledge base failed to initialize. Please check console for errors.")
+elif st.session_state.user_local_doc_path: # If path is set but vector store/chain failed
+    st.info("Knowledge base setup is in progress or encountered an issue. Please check console for details.")
+else: # If no path is provided yet
+    st.info("Please enter the path to your MBA documents folder above to get started.")
+
 
 st.markdown("---")
 st.caption("Powered by Streamlit, LangChain, and Google Gemini API.")
